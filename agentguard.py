@@ -18,6 +18,11 @@ permissions = {
     "Viewer": ["view_task"],
 }
 
+
+def check_permission(role, action):
+    return action in permissions.get(role, [])
+
+
 risk_levels = {"create_task": "MEDIUM", "delete_task": "HIGH", "view_task": "LOW"}
 
 # 4. Application storage
@@ -28,7 +33,7 @@ tasks = []
 intent_valid = expected == proposed
 
 # 6. Permission validation
-permission_valid = proposed["action"] in permissions.get(user_role, [])
+permission_valid = check_permission(user_role, proposed["action"])
 
 # 7. Risk evaluation
 risk = risk_levels.get(proposed["action"], "UNKNOWN")
