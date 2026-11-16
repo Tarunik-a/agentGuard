@@ -1,6 +1,7 @@
 import json
 from datetime import datetime
 from typing import Literal
+import uuid
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
@@ -55,6 +56,7 @@ def evaluate_action(expected, proposed, role):
             "risk": "UNKNOWN",
             "decision": "BLOCK",
             "errors": ["Input must be a dictionary"],
+            "reason": "Input must be a dictionary",
         }
 
     # 2. Validate proposal using Pydantic
@@ -70,6 +72,7 @@ def evaluate_action(expected, proposed, role):
             "permission_valid": False,
             "risk": "UNKNOWN",
             "decision": "BLOCK",
+            "reason": "Invalid action schema",
             "errors": error.errors(),
         }
 
@@ -98,12 +101,32 @@ def evaluate_action(expected, proposed, role):
     else:
         decision = "ALLOW"
 
+        # 7. Explain the decision
+    if not schema_valid:
+        reason = "Invalid action schema"
+
+    elif not intent_valid:
+        reason = "Proposed action does not match expected intent"
+
+    elif not permission_valid:
+        reason = "User does not have permission"
+
+    elif risk == "UNKNOWN":
+        reason = "Unknown risk level"
+
+    elif decision == "REVIEW_REQUIRED":
+        reason = "High-risk action requires human review"
+
+    else:
+        reason = "All validation checks passed"
+
     return {
         "schema_valid": schema_valid,
         "intent_valid": intent_valid,
         "permission_valid": permission_valid,
         "risk": risk,
         "decision": decision,
+        "reason": reason,
         "errors": validation_errors,
     }
 
@@ -116,11 +139,13 @@ tasks = []
 
 def main():
     result = evaluate_action(expected, proposed, user_role)
+    schema_valid = result["schema_valid"]
 
     intent_valid = result["intent_valid"]
     permission_valid = result["permission_valid"]
     risk = result["risk"]
     decision = result["decision"]
+    reason = result["reason"]
 
     # 9. Application function
     def create_task(title, priority):
@@ -173,6 +198,8 @@ def main():
 
     # 12. Build structured report
     report = {
+        "record_id": str(uuid.uuid4()),
+        "schema": "PASSED" if schema_valid else "FAILED",
         "intent": "PASSED" if intent_valid else "FAILED",
         "permission": "ALLOWED" if permission_valid else "DENIED",
         "risk": risk,
@@ -180,6 +207,7 @@ def main():
         "execution": execution_status,
         "verification": verification_status,
         "errors": errors,
+        "reason": reason,
     }
 
     # 13. Display report

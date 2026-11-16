@@ -33,6 +33,8 @@ def test_valid_manager_action():
 
     assert result["decision"] == "ALLOW"
 
+    assert result["reason"] == "All validation checks passed"
+
 
 def test_invalid_intent_is_blocked():
     expected = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
@@ -53,6 +55,8 @@ def test_unauthorized_action_is_blocked():
 
     assert result["decision"] == "BLOCK"
 
+    assert result["reason"] == "User does not have permission"
+
 
 def test_high_risk_action_requires_review():
     expected = {"action": "delete_task"}
@@ -62,6 +66,8 @@ def test_high_risk_action_requires_review():
     result = evaluate_action(expected, proposed, "Admin")
 
     assert result["decision"] == "REVIEW_REQUIRED"
+
+    assert result["reason"] == "High-risk action requires human review"
 
 
 def test_missing_action_is_blocked():
@@ -100,3 +106,60 @@ def test_invalid_priority_is_rejected():
 
     except ValidationError:
         assert True
+
+
+def test_create_task_missing_title_is_rejected():
+
+    proposal = {"action": "create_task", "priority": "high"}
+
+    from pydantic import ValidationError
+
+    try:
+        ActionSchema.model_validate(proposal)
+        assert False, "Missing title should be rejected"
+    except ValidationError:
+        assert True
+
+
+def test_unexpected_field_is_rejected():
+
+    proposal = {
+        "action": "create_task",
+        "title": "Fix Login API",
+        "priority": "high",
+        "password": "secret",
+    }
+
+    from pydantic import ValidationError
+
+    try:
+        ActionSchema.model_validate(proposal)
+        assert False, "Unexpected field should be rejected"
+    except ValidationError:
+        assert True
+
+
+def test_invalid_priority_type_is_rejected():
+
+    proposal = {"action": "create_task", "title": "Fix Login API", "priority": 123}
+
+    from pydantic import ValidationError
+
+    try:
+        ActionSchema.model_validate(proposal)
+        assert False, "Invalid priority type should be rejected"
+    except ValidationError:
+        assert True
+
+
+def test_invalid_schema_returns_reason():
+
+    expected = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
+
+    proposed = {"action": "create_task", "title": "Fix Login API", "priority": "urgent"}
+
+    result = evaluate_action(expected, proposed, "Manager")
+
+    assert result["decision"] == "BLOCK"
+    assert result["schema_valid"] is False
+    assert result["reason"] == "Invalid action schema"
