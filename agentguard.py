@@ -137,6 +137,82 @@ risk_levels = {"create_task": "MEDIUM", "delete_task": "HIGH", "view_task": "LOW
 tasks = []
 
 
+def create_task(title, priority):
+
+    task = {"title": title, "priority": priority}
+
+    tasks.append(task)
+
+    return task
+
+
+def execute_task(expected, proposed):
+
+    execution_status = "NOT_EXECUTED"
+    verification_status = "NOT_CHECKED"
+    errors = []
+
+    try:
+        actual = create_task(proposed["title"], proposed["priority"])
+
+        execution_status = "SUCCESS"
+
+        verified, verification_errors = verify_state(expected, actual)
+
+        if verified:
+            verification_status = "PASSED"
+        else:
+            verification_status = "FAILED"
+            errors.extend(verification_errors)
+
+    except Exception as error:
+        execution_status = "FAILED"
+        errors.append(str(error))
+
+    return {
+        "execution": execution_status,
+        "verification": verification_status,
+        "errors": errors,
+    }
+
+
+def verify_state(expected, actual):
+
+    errors = []
+
+    for field in expected:
+        if field == "action":
+            continue
+
+        if field not in actual:
+            errors.append(field + " is missing")
+
+        elif expected[field] != actual[field]:
+            errors.append(field + " is incorrect")
+
+    return len(errors) == 0, errors
+
+
+def determine_outcome(execution_status, verification_status):
+
+    if execution_status == "SUCCESS" and verification_status == "PASSED":
+        return "SUCCESS"
+
+    if verification_status == "FAILED":
+        return "VERIFICATION_FAILED"
+
+    if execution_status == "FAILED":
+        return "EXECUTION_FAILED"
+
+    return "NOT_COMPLETED"
+
+
+def save_audit_record(report, file_path="audit_log.jsonl"):
+
+    with open(file_path, "a") as file:
+        file.write(json.dumps(report) + "\n")
+
+
 def main():
     result = evaluate_action(expected, proposed, user_role)
     schema_valid = result["schema_valid"]
@@ -147,54 +223,19 @@ def main():
     decision = result["decision"]
     reason = result["reason"]
 
-    # 9. Application function
-    def create_task(title, priority):
-
-        task = {"title": title, "priority": priority}
-
-        tasks.append(task)
-
-        return task
-
-    # 10. State verification
-    def verify_state(expected, actual):
-
-        errors = []
-
-        for field in expected:
-            if field == "action":
-                continue
-
-            if field not in actual:
-                errors.append(field + " is missing")
-
-            elif expected[field] != actual[field]:
-                errors.append(field + " is incorrect")
-
-        return len(errors) == 0, errors
-
     # 11. Execution
-    execution_status = "NOT_EXECUTED"
-    verification_status = "NOT_CHECKED"
-    errors = []
 
     if decision == "ALLOW":
-        try:
-            actual = create_task(proposed["title"], proposed["priority"])
+        execution_result = execute_task(expected, proposed)
 
-            execution_status = "SUCCESS"
+        execution_status = execution_result["execution"]
+        verification_status = execution_result["verification"]
+        errors = execution_result["errors"]
 
-            verified, verification_errors = verify_state(expected, actual)
-
-            if verified:
-                verification_status = "PASSED"
-            else:
-                verification_status = "FAILED"
-                errors.extend(verification_errors)
-
-        except Exception as error:
-            execution_status = "FAILED"
-            errors.append(str(error))
+    else:
+        execution_status = "NOT_EXECUTED"
+        verification_status = "NOT_CHECKED"
+        errors = []
 
     # 12. Build structured report
     report = {
@@ -206,6 +247,7 @@ def main():
         "decision": decision,
         "execution": execution_status,
         "verification": verification_status,
+        "outcome": determine_outcome(execution_status, verification_status),
         "errors": errors,
         "reason": reason,
     }
@@ -220,8 +262,7 @@ def main():
     report["timestamp"] = datetime.now().isoformat()
 
     # Save report to audit log
-    with open("audit_log.jsonl", "a") as file:
-        file.write(json.dumps(report) + "\n")
+    save_audit_record(report)
 
     print("\nAudit record saved successfully.")
 

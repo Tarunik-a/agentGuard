@@ -1,4 +1,19 @@
-from agentguard import check_permission, evaluate_action, ActionSchema
+from agentguard import (
+    check_permission,
+    evaluate_action,
+    ActionSchema,
+    create_task,
+    tasks,
+)
+
+from agentguard import (
+    check_permission,
+    evaluate_action,
+    ActionSchema,
+    create_task,
+    tasks,
+    execute_task,
+)
 
 
 def test_admin_can_delete_task():
@@ -163,3 +178,148 @@ def test_invalid_schema_returns_reason():
     assert result["decision"] == "BLOCK"
     assert result["schema_valid"] is False
     assert result["reason"] == "Invalid action schema"
+
+
+def test_execution_failure_is_recorded():
+
+    execution_status = "NOT_EXECUTED"
+    errors = []
+
+    try:
+        raise RuntimeError("Simulated application failure")
+
+    except Exception as error:
+        execution_status = "FAILED"
+        errors.append(str(error))
+
+    assert execution_status == "FAILED"
+    assert "Simulated application failure" in errors
+
+
+def test_create_task_executes_successfully():
+
+    tasks.clear()
+
+    result = create_task("Fix Login API", "high")
+
+    assert result["title"] == "Fix Login API"
+    assert result["priority"] == "high"
+    assert result in tasks
+
+
+def test_create_task_failure_with_invalid_arguments():
+
+    tasks.clear()
+
+    try:
+        create_task()
+        assert False, "Missing arguments should cause failure"
+
+    except TypeError:
+        assert True
+
+
+def test_execute_task_handles_missing_fields():
+
+    proposed = {"action": "create_task"}
+
+    expected = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
+
+    result = execute_task(expected, proposed)
+
+    assert result["execution"] == "FAILED"
+    assert result["verification"] == "NOT_CHECKED"
+    assert len(result["errors"]) > 0
+
+
+def test_execute_task_detects_wrong_result(monkeypatch):
+
+    import agentguard
+
+    def wrong_create_task(title, priority):
+        return {"title": "Wrong Task", "priority": priority}
+
+    monkeypatch.setattr(agentguard, "create_task", wrong_create_task)
+
+    expected = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
+
+    proposed = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
+
+    result = agentguard.execute_task(expected, proposed)
+
+    assert result["execution"] == "SUCCESS"
+    assert result["verification"] == "FAILED"
+    assert result["execution"] == "SUCCESS"
+    assert "title is incorrect" in result["errors"]
+
+
+def test_outcome_detects_verification_failure():
+
+    from agentguard import determine_outcome
+
+    outcome = determine_outcome("SUCCESS", "FAILED")
+
+    assert outcome == "VERIFICATION_FAILED"
+
+
+def test_successful_outcome():
+    from agentguard import determine_outcome
+
+    assert determine_outcome("SUCCESS", "PASSED") == "SUCCESS"
+
+
+def test_execution_failed_outcome():
+    from agentguard import determine_outcome
+
+    assert determine_outcome("FAILED", "NOT_CHECKED") == "EXECUTION_FAILED"
+
+
+def test_not_completed_outcome():
+    from agentguard import determine_outcome
+
+    assert determine_outcome("NOT_EXECUTED", "NOT_CHECKED") == "NOT_COMPLETED"
+
+
+def test_audit_record_contains_outcome(tmp_path):
+
+    import json
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+
+    report = {
+        "record_id": "test-001",
+        "execution": "SUCCESS",
+        "verification": "FAILED",
+        "outcome": "VERIFICATION_FAILED",
+    }
+
+    save_audit_record(report, audit_file)
+
+    with open(audit_file, "r") as file:
+        saved_record = json.loads(file.readline())
+
+    assert saved_record["outcome"] == "VERIFICATION_FAILED"
+    assert saved_record["record_id"] == "test-001"
+
+
+def test_audit_log_preserves_multiple_records(tmp_path):
+
+    import json
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+
+    first_report = {"record_id": "test-001", "outcome": "SUCCESS"}
+
+    second_report = {"record_id": "test-002", "outcome": "VERIFICATION_FAILED"}
+
+    save_audit_record(first_report, audit_file)
+    save_audit_record(second_report, audit_file)
+
+    with open(audit_file, "r") as file:
+        records = [json.loads(line) for line in file]
+
+    assert len(records) == 2
+    assert records[0]["record_id"] == "test-001"
+    assert records[1]["record_id"] == "test-002"
