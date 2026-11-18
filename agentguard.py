@@ -209,8 +209,42 @@ def determine_outcome(execution_status, verification_status):
 
 def save_audit_record(report, file_path="audit_log.jsonl"):
 
-    with open(file_path, "a") as file:
-        file.write(json.dumps(report) + "\n")
+    if not isinstance(report, dict):
+        return {"saved": False, "error": "Audit report must be a dictionary"}
+
+    if "record_id" not in report:
+        return {"saved": False, "error": "Audit report is missing record_id"}
+
+    if not report["record_id"].strip():
+        return {"saved": False, "error": "Audit report has an empty record_id"}
+
+    if "outcome" not in report:
+        return {"saved": False, "error": "Audit report is missing outcome"}
+
+    if report["outcome"] not in [
+        "SUCCESS",
+        "VERIFICATION_FAILED",
+        "EXECUTION_FAILED",
+        "NOT_COMPLETED",
+    ]:
+        return {"saved": False, "error": "Audit report has an invalid outcome"}
+
+    if "decision" not in report:
+        return {"saved": False, "error": "Audit report is missing decision"}
+
+    if report["decision"] not in ["ALLOW", "BLOCK", "REVIEW_REQUIRED"]:
+        return {"saved": False, "error": "Audit report has an invalid decision"}
+
+    if not isinstance(report["record_id"], str):
+        return {"saved": False, "error": "Audit report record_id must be a string"}
+    try:
+        with open(file_path, "a") as file:
+            file.write(json.dumps(report) + "\n")
+
+        return {"saved": True, "error": None}
+
+    except OSError as error:
+        return {"saved": False, "error": str(error)}
 
 
 def main():
@@ -261,8 +295,12 @@ def main():
     # Add timestamp to report
     report["timestamp"] = datetime.now().isoformat()
 
+    report["audit_status"] = "PENDING"
+
     # Save report to audit log
-    save_audit_record(report)
+    audit_result = save_audit_record(report)
+
+    report["audit_status"] = "SAVED" if audit_result["saved"] else "FAILED"
 
     print("\nAudit record saved successfully.")
 
