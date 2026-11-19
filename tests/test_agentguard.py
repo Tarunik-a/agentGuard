@@ -311,12 +311,16 @@ def test_audit_log_preserves_multiple_records(tmp_path):
         "record_id": "test-001",
         "outcome": "SUCCESS",
         "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "PASSED",
     }
 
     second_report = {
         "record_id": "test-002",
         "outcome": "VERIFICATION_FAILED",
         "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "PASSED",
     }
 
     save_audit_record(first_report, audit_file)
@@ -453,3 +457,117 @@ def test_audit_rejects_invalid_decision(tmp_path):
     assert result["saved"] is False
     assert result["error"] == "Audit report has an invalid decision"
     assert not audit_file.exists()
+
+
+def test_audit_rejects_missing_execution(tmp_path):
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+    report = {"record_id": "test-005", "outcome": "SUCCESS", "decision": "ALLOW"}
+
+    result = save_audit_record(report, audit_file)
+
+    assert result["saved"] is False
+    assert result["error"] == "Audit report is missing execution"
+    assert not audit_file.exists()
+
+
+def test_audit_rejects_invalid_execution_status(tmp_path):
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+    report = {
+        "record_id": "test-006",
+        "outcome": "SUCCESS",
+        "decision": "ALLOW",
+        "execution": "MAYBE",
+    }
+
+    result = save_audit_record(report, audit_file)
+
+    assert result["saved"] is False
+    assert result["error"] == "Audit report has an invalid execution status"
+    assert not audit_file.exists()
+
+
+def test_audit_rejects_missing_verification(tmp_path):
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+    report = {
+        "record_id": "test-007",
+        "outcome": "SUCCESS",
+        "decision": "ALLOW",
+        "execution": "SUCCESS",
+    }
+
+    result = save_audit_record(report, audit_file)
+
+    assert result["saved"] is False
+    assert result["error"] == "Audit report is missing verification"
+    assert not audit_file.exists()
+
+
+def test_audit_rejects_invalid_verification_status(tmp_path):
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+
+    report = {
+        "record_id": "test-008",
+        "outcome": "SUCCESS",
+        "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "MAYBE",
+    }
+
+    result = save_audit_record(report, audit_file)
+
+    assert result["saved"] is False
+    assert result["error"] == "Audit report has an invalid verification status"
+    assert not audit_file.exists()
+
+
+def test_audit_handles_json_serialization_error(tmp_path):
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+
+    report = {
+        "record_id": "test-009",
+        "outcome": "SUCCESS",
+        "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "PASSED",
+        "extra_data": object(),
+    }
+
+    result = save_audit_record(report, audit_file)
+
+    assert result["saved"] is False
+    assert result["error"] is not None
+    assert not audit_file.exists()
+
+
+def test_audit_saves_valid_report(tmp_path):
+    import json
+    from agentguard import save_audit_record
+
+    audit_file = tmp_path / "audit_log.jsonl"
+
+    report = {
+        "record_id": "test-010",
+        "outcome": "SUCCESS",
+        "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "PASSED",
+    }
+
+    result = save_audit_record(report, audit_file)
+
+    assert result["saved"] is True
+    assert result["error"] is None
+
+    saved_report = json.loads(audit_file.read_text())
+
+    assert saved_report == report

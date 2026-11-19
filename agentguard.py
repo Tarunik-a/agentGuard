@@ -235,15 +235,31 @@ def save_audit_record(report, file_path="audit_log.jsonl"):
     if report["decision"] not in ["ALLOW", "BLOCK", "REVIEW_REQUIRED"]:
         return {"saved": False, "error": "Audit report has an invalid decision"}
 
+    if "execution" not in report:
+        return {"saved": False, "error": "Audit report is missing execution"}
+
+    if report["execution"] not in ["SUCCESS", "FAILED", "NOT_EXECUTED"]:
+        return {"saved": False, "error": "Audit report has an invalid execution status"}
+
+    if "verification" not in report:
+        return {"saved": False, "error": "Audit report is missing verification"}
+
+    if report["verification"] not in ["PASSED", "FAILED", "NOT_CHECKED"]:
+        return {
+            "saved": False,
+            "error": "Audit report has an invalid verification status",
+        }
+
     if not isinstance(report["record_id"], str):
         return {"saved": False, "error": "Audit report record_id must be a string"}
     try:
+        serialized_report = json.dumps(report)
+
         with open(file_path, "a") as file:
-            file.write(json.dumps(report) + "\n")
+            file.write(serialized_report + "\n")
 
         return {"saved": True, "error": None}
-
-    except OSError as error:
+    except (OSError, TypeError, ValueError) as error:
         return {"saved": False, "error": str(error)}
 
 
