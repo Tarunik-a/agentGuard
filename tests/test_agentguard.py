@@ -54,9 +54,9 @@ def test_invalid_intent_is_blocked():
 
 
 def test_unauthorized_action_is_blocked():
-    expected = {"action": "delete_task"}
+    expected = {"action": "delete_task", "task_id": "task-123"}
 
-    proposed = {"action": "delete_task"}
+    proposed = {"action": "delete_task", "task_id": "task-123"}
 
     result = evaluate_action(expected, proposed, "Viewer")
 
@@ -66,9 +66,9 @@ def test_unauthorized_action_is_blocked():
 
 
 def test_high_risk_action_requires_review():
-    expected = {"action": "delete_task"}
+    expected = {"action": "delete_task", "task_id": "task-123"}
 
-    proposed = {"action": "delete_task"}
+    proposed = {"action": "delete_task", "task_id": "task-123"}
 
     result = evaluate_action(expected, proposed, "Admin")
 
@@ -571,3 +571,127 @@ def test_audit_saves_valid_report(tmp_path):
     saved_report = json.loads(audit_file.read_text())
 
     assert saved_report == report
+
+
+def test_view_task_successfully():
+
+    from agentguard import create_task, view_task, tasks
+
+    tasks.clear()
+
+    task = create_task("AgentGuard", "high")
+
+    result = view_task(task["id"])
+
+    assert result == task
+
+
+def test_delete_task_successfully():
+
+    from agentguard import create_task, delete_task, view_task, tasks
+
+    tasks.clear()
+
+    task = create_task("AgentGuard", "high")
+
+    result = delete_task(task["id"])
+
+    assert result == task
+    assert view_task(task["id"]) is None
+
+
+def test_delete_nonexistent_task():
+
+    from agentguard import delete_task, tasks
+
+    tasks.clear()
+
+    result = delete_task("nonexistent-id")
+
+    assert result is None
+    assert tasks == []
+
+
+def test_view_nonexistent_task():
+
+    from agentguard import view_task, tasks
+
+    tasks.clear()
+
+    result = view_task("nonexistent-id")
+
+    assert result is None
+    assert tasks == []
+
+
+def test_execute_view_task_successfully():
+
+    from agentguard import create_task, execute_task, tasks
+
+    tasks.clear()
+
+    task = create_task("AgentGuard", "high")
+
+    expected = {"action": "view_task", "task_id": task["id"]}
+
+    proposed = expected.copy()
+
+    result = execute_task(expected, proposed)
+
+    assert result["execution"] == "SUCCESS"
+    assert result["verification"] == "PASSED"
+    assert result["errors"] == []
+
+
+def test_execute_delete_task_successfully():
+
+    from agentguard import create_task, execute_task, view_task, tasks
+
+    tasks.clear()
+
+    task = create_task("AgentGuard", "high")
+
+    expected = {"action": "delete_task", "task_id": task["id"]}
+
+    proposed = expected.copy()
+
+    result = execute_task(expected, proposed)
+
+    assert result["execution"] == "SUCCESS"
+    assert result["verification"] == "PASSED"
+    assert result["errors"] == []
+    assert view_task(task["id"]) is None
+
+
+def test_execute_view_nonexistent_task():
+
+    import agentguard
+
+    agentguard.tasks.clear()
+
+    expected = {"action": "view_task", "task_id": "missing-task"}
+
+    proposed = {"action": "view_task", "task_id": "missing-task"}
+
+    result = agentguard.execute_task(expected, proposed)
+
+    assert result["execution"] == "FAILED"
+    assert result["verification"] == "NOT_CHECKED"
+    assert "Task not found" in result["errors"]
+
+
+def test_execute_delete_nonexistent_task():
+
+    import agentguard
+
+    agentguard.tasks.clear()
+
+    expected = {"action": "delete_task", "task_id": "missing-task"}
+
+    proposed = {"action": "delete_task", "task_id": "missing-task"}
+
+    result = agentguard.execute_task(expected, proposed)
+
+    assert result["execution"] == "FAILED"
+    assert result["verification"] == "NOT_CHECKED"
+    assert "Task not found" in result["errors"]

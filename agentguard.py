@@ -1,7 +1,7 @@
 import json
+import uuid
 from datetime import datetime
 from typing import Literal
-import uuid
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
@@ -12,6 +12,7 @@ class ActionSchema(BaseModel):
     action: Literal["create_task", "delete_task", "view_task"]
     title: str | None = None
     priority: Literal["high", "medium", "low"] | None = None
+    task_id: str | None = None
 
     @model_validator(mode="after")
     def validate_action_fields(self):
@@ -20,19 +21,22 @@ class ActionSchema(BaseModel):
             if not self.title or not self.priority:
                 raise ValueError("create_task requires title and priority")
 
+        elif self.action in ["view_task", "delete_task"]:
+            if not self.task_id:
+                raise ValueError(f"{self.action} requires task_id")
+
         return self
 
 
 # AGENTGUARD - STRUCTURED REPORT
 
 # 1. Expected task
-expected = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
+expected = {"action": "delete_task", "task_id": "task-123"}
 
-# 2. AI proposal
-proposed = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
+proposed = {"action": "delete_task", "task_id": "task-123"}
 
 # 3. User details
-user_role = "Manager"
+user_role = "Admin"
 
 permissions = {
     "Admin": ["create_task", "delete_task"],
@@ -62,8 +66,6 @@ def evaluate_action(expected, proposed, role):
     # 2. Validate proposal using Pydantic
     try:
         validated = ActionSchema.model_validate(proposed)
-        schema_valid = True
-        validation_errors = []
 
     except ValidationError as error:
         return {
@@ -87,12 +89,7 @@ def evaluate_action(expected, proposed, role):
     risk = risk_levels.get(action, "UNKNOWN")
 
     # 6. Make decision
-    if (
-        not schema_valid
-        or not intent_valid
-        or not permission_valid
-        or risk == "UNKNOWN"
-    ):
+    if not intent_valid or not permission_valid or risk == "UNKNOWN":
         decision = "BLOCK"
 
     elif risk == "HIGH":
@@ -102,10 +99,7 @@ def evaluate_action(expected, proposed, role):
         decision = "ALLOW"
 
         # 7. Explain the decision
-    if not schema_valid:
-        reason = "Invalid action schema"
-
-    elif not intent_valid:
+    if not intent_valid:
         reason = "Proposed action does not match expected intent"
 
     elif not permission_valid:
@@ -121,13 +115,13 @@ def evaluate_action(expected, proposed, role):
         reason = "All validation checks passed"
 
     return {
-        "schema_valid": schema_valid,
+        "schema_valid": True,
         "intent_valid": intent_valid,
         "permission_valid": permission_valid,
         "risk": risk,
         "decision": decision,
         "reason": reason,
-        "errors": validation_errors,
+        "errors": [],
     }
 
 
@@ -139,11 +133,30 @@ tasks = []
 
 def create_task(title, priority):
 
-    task = {"title": title, "priority": priority}
+    task = {"id": str(uuid.uuid4()), "title": title, "priority": priority}
 
     tasks.append(task)
 
     return task
+
+
+def view_task(task_id):
+
+    for task in tasks:
+        if task["id"] == task_id:
+            return task
+
+    return None
+
+
+def delete_task(task_id):
+
+    for task in tasks:
+        if task["id"] == task_id:
+            tasks.remove(task)
+            return task
+
+    return None
 
 
 def execute_task(expected, proposed):
@@ -153,7 +166,22 @@ def execute_task(expected, proposed):
     errors = []
 
     try:
-        actual = create_task(proposed["title"], proposed["priority"])
+        action = proposed["action"]
+
+        if action == "create_task":
+            actual = create_task(proposed["title"], proposed["priority"])
+
+        elif action == "view_task":
+            actual = view_task(proposed["task_id"])
+
+        elif action == "delete_task":
+            actual = delete_task(proposed["task_id"])
+
+        else:
+            raise ValueError("Unsupported action")
+
+        if actual is None:
+            raise ValueError("Task not found")
 
         execution_status = "SUCCESS"
 
@@ -179,16 +207,44 @@ def execute_task(expected, proposed):
 def verify_state(expected, actual):
 
     errors = []
+    action = expected.get("action")
+    task_id = expected.get("task_id")
 
-    for field in expected:
-        if field == "action":
-            continue
+    if action == "create_task":
+        if "id" not in actual:
+            errors.append("Created task is missing its ID")
 
-        if field not in actual:
-            errors.append(field + " is missing")
+        else:
+            stored_task = next(
+                (task for task in tasks if task["id"] == actual["id"]), None
+            )
 
-        elif expected[field] != actual[field]:
-            errors.append(field + " is incorrect")
+            if stored_task is None:
+                errors.append("Created task was not found in storage")
+
+            elif stored_task != actual:
+                errors.append("Stored task does not match created task")
+
+        if expected["title"] != actual.get("title"):
+            errors.append("title is incorrect")
+
+        if expected["priority"] != actual.get("priority"):
+            errors.append("priority is incorrect")
+
+    elif action == "view_task":
+        stored_task = next((task for task in tasks if task["id"] == task_id), None)
+
+        if stored_task is None:
+            errors.append("Viewed task was not found in storage")
+
+        elif stored_task != actual:
+            errors.append("Viewed task does not match stored task")
+
+    elif action == "delete_task":
+        stored_task = next((task for task in tasks if task["id"] == task_id), None)
+
+        if stored_task is not None:
+            errors.append("Deleted task still exists in storage")
 
     return len(errors) == 0, errors
 
@@ -214,6 +270,9 @@ def save_audit_record(report, file_path="audit_log.jsonl"):
 
     if "record_id" not in report:
         return {"saved": False, "error": "Audit report is missing record_id"}
+
+    if not isinstance(report["record_id"], str):
+        return {"saved": False, "error": "Audit report record_id must be a string"}
 
     if not report["record_id"].strip():
         return {"saved": False, "error": "Audit report has an empty record_id"}
@@ -250,8 +309,6 @@ def save_audit_record(report, file_path="audit_log.jsonl"):
             "error": "Audit report has an invalid verification status",
         }
 
-    if not isinstance(report["record_id"], str):
-        return {"saved": False, "error": "Audit report record_id must be a string"}
     try:
         serialized_report = json.dumps(report)
 
@@ -281,6 +338,23 @@ def main():
         execution_status = execution_result["execution"]
         verification_status = execution_result["verification"]
         errors = execution_result["errors"]
+
+    elif decision == "REVIEW_REQUIRED":
+        print("\nHuman approval required for this action.")
+
+        approval = input("Approve this action? (yes/no): ").strip().lower()
+
+        if approval == "yes":
+            execution_result = execute_task(expected, proposed)
+
+            execution_status = execution_result["execution"]
+            verification_status = execution_result["verification"]
+            errors = execution_result["errors"]
+
+        else:
+            execution_status = "NOT_EXECUTED"
+            verification_status = "NOT_CHECKED"
+            errors = ["Human review rejected the action"]
 
     else:
         execution_status = "NOT_EXECUTED"
@@ -316,9 +390,18 @@ def main():
     # Save report to audit log
     audit_result = save_audit_record(report)
 
+    if audit_result["saved"]:
+        report["audit_status"] = "SAVED"
+    else:
+        report["audit_status"] = "FAILED"
+
     report["audit_status"] = "SAVED" if audit_result["saved"] else "FAILED"
 
-    print("\nAudit record saved successfully.")
+    if report["audit_status"] == "SAVED":
+        print("\nAudit record saved successfully.")
+    else:
+        print("\nAudit record could not be saved.")
+        print("Reason:", audit_result["error"])
 
 
 if __name__ == "__main__":
