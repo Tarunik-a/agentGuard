@@ -1,3 +1,5 @@
+import json
+
 from agentguard import (
     ActionSchema,
     check_permission,
@@ -5,6 +7,8 @@ from agentguard import (
     evaluate_action,
     execute_task,
     tasks,
+    save_audit_record,
+    verify_state,
 )
 
 
@@ -695,3 +699,143 @@ def test_execute_delete_nonexistent_task():
     assert result["execution"] == "FAILED"
     assert result["verification"] == "NOT_CHECKED"
     assert "Task not found" in result["errors"]
+
+
+def test_execute_delete_detects_false_success(monkeypatch):
+
+    task = create_task("Test Task", "high")
+
+    def fake_delete_task(task_id):
+        return task.copy()
+
+    monkeypatch.setattr("agentguard.delete_task", fake_delete_task)
+
+    expected = {"action": "delete_task", "task_id": task["id"]}
+
+    proposed = expected.copy()
+
+    result = execute_task(expected, proposed)
+
+    assert result["execution"] == "SUCCESS"
+    assert result["verification"] == "FAILED"
+    assert "Deleted task still exists in storage" in result["errors"]
+
+
+def test_execute_create_returns_verification_evidence():
+
+    expected = {"action": "create_task", "title": "Evidence Test", "priority": "high"}
+
+    proposed = expected.copy()
+
+    result = execute_task(expected, proposed)
+
+    assert result["verification"] == "PASSED"
+    assert len(result["evidence"]) == 1
+    assert result["evidence"][0]["check"] == "task_storage_lookup"
+    assert result["evidence"][0]["found"] is True
+
+
+def test_execute_view_returns_verification_evidence():
+
+    task = create_task("View Evidence Test", "medium")
+
+    expected = {"action": "view_task", "task_id": task["id"]}
+
+    proposed = expected.copy()
+
+    result = execute_task(expected, proposed)
+
+    assert result["verification"] == "PASSED"
+    assert len(result["evidence"]) == 1
+    assert result["evidence"][0]["check"] == "task_storage_lookup"
+    assert result["evidence"][0]["found"] is True
+
+
+def test_execute_delete_returns_verification_evidence():
+
+    task = create_task("Delete Evidence Test", "high")
+
+    expected = {"action": "delete_task", "task_id": task["id"]}
+
+    proposed = expected.copy()
+
+    result = execute_task(expected, proposed)
+
+    assert result["verification"] == "PASSED"
+    assert len(result["evidence"]) == 1
+    assert result["evidence"][0]["check"] == "task_deletion_lookup"
+    assert result["evidence"][0]["still_exists"] is False
+
+
+def test_audit_record_preserves_verification_evidence(tmp_path):
+
+    report = {
+        "record_id": "evidence-test-001",
+        "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "PASSED",
+        "outcome": "SUCCESS",
+        "evidence": [
+            {"check": "task_storage_lookup", "task_id": "task-123", "found": True}
+        ],
+        "verification_messages": ["Created task was found and matches stored data."],
+    }
+
+    file_path = tmp_path / "audit.jsonl"
+
+    result = save_audit_record(report, str(file_path))
+
+    assert result["saved"] is True
+
+    saved_report = json.loads(file_path.read_text())
+
+    assert saved_report["evidence"] == report["evidence"]
+    assert saved_report["verification_messages"] == report["verification_messages"]
+
+
+def test_create_task_verification_failure_message(monkeypatch):
+
+    actual = {"id": "task-123", "title": "Test task", "priority": "high"}
+
+    monkeypatch.setattr("agentguard.get_task_from_storage", lambda task_id: None)
+
+    expected = {"action": "create_task", "title": "Test task", "priority": "high"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "Created task was not found in storage" in errors
+    assert any("Verification failed" in message for message in messages)
+
+
+def test_view_task_verification_failure_message(monkeypatch):
+
+    monkeypatch.setattr("agentguard.get_task_from_storage", lambda task_id: None)
+
+    expected = {"action": "view_task", "task_id": "task-123"}
+
+    actual = None
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "Viewed task was not found in storage" in errors
+    assert any("Verification failed" in message for message in messages)
+
+
+def test_delete_task_verification_failure_message(monkeypatch):
+
+    monkeypatch.setattr(
+        "agentguard.get_task_from_storage",
+        lambda task_id: {"id": task_id, "title": "Test task", "priority": "high"},
+    )
+
+    expected = {"action": "delete_task", "task_id": "task-123"}
+
+    actual = {"id": "task-123", "title": "Test task", "priority": "high"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "Deleted task still exists in storage" in errors
+    assert any("Verification failed" in message for message in messages)

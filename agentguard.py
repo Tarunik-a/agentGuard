@@ -159,11 +159,21 @@ def delete_task(task_id):
     return None
 
 
+def get_task_from_storage(task_id):
+    for task in tasks:
+        if task["id"] == task_id:
+            return task.copy()
+
+    return None
+
+
 def execute_task(expected, proposed):
 
     execution_status = "NOT_EXECUTED"
     verification_status = "NOT_CHECKED"
     errors = []
+    evidence = []
+    verification_messages = []
 
     try:
         action = proposed["action"]
@@ -185,7 +195,9 @@ def execute_task(expected, proposed):
 
         execution_status = "SUCCESS"
 
-        verified, verification_errors = verify_state(expected, actual)
+        verified, verification_errors, evidence, verification_messages = verify_state(
+            expected, actual
+        )
 
         if verified:
             verification_status = "PASSED"
@@ -201,12 +213,16 @@ def execute_task(expected, proposed):
         "execution": execution_status,
         "verification": verification_status,
         "errors": errors,
+        "evidence": evidence,
+        "verification_messages": verification_messages,
     }
 
 
 def verify_state(expected, actual):
 
     errors = []
+    evidence = []
+    verification_messages = []
     action = expected.get("action")
     task_id = expected.get("task_id")
 
@@ -215,15 +231,29 @@ def verify_state(expected, actual):
             errors.append("Created task is missing its ID")
 
         else:
-            stored_task = next(
-                (task for task in tasks if task["id"] == actual["id"]), None
+            stored_task = get_task_from_storage(actual["id"])
+
+            evidence.append(
+                {
+                    "check": "task_storage_lookup",
+                    "task_id": actual["id"],
+                    "found": stored_task is not None,
+                }
             )
 
             if stored_task is None:
                 errors.append("Created task was not found in storage")
+                verification_messages.append(
+                    "Verification failed: created task was not found in storage."
+                )
 
             elif stored_task != actual:
                 errors.append("Stored task does not match created task")
+                verification_messages.append(
+                    "Verification failed: stored task data does not match the execution result."
+                )
+            else:
+                verification_messages.append("Viewed task matches the stored task.")
 
         if expected["title"] != actual.get("title"):
             errors.append("title is incorrect")
@@ -232,21 +262,50 @@ def verify_state(expected, actual):
             errors.append("priority is incorrect")
 
     elif action == "view_task":
-        stored_task = next((task for task in tasks if task["id"] == task_id), None)
+        stored_task = get_task_from_storage(task_id)
+        evidence.append(
+            {
+                "check": "task_storage_lookup",
+                "task_id": task_id,
+                "found": stored_task is not None,
+            }
+        )
 
         if stored_task is None:
             errors.append("Viewed task was not found in storage")
+            verification_messages.append(
+                "Verification failed: viewed task was not found in storage."
+            )
 
         elif stored_task != actual:
             errors.append("Viewed task does not match stored task")
+            verification_messages.append(
+                "Verification failed: viewed task data does not match stored data."
+            )
+
+        else:
+            verification_messages.append("Viewed task matches the stored task.")
 
     elif action == "delete_task":
-        stored_task = next((task for task in tasks if task["id"] == task_id), None)
+        stored_task = get_task_from_storage(task_id)
+        evidence.append(
+            {
+                "check": "task_deletion_lookup",
+                "task_id": task_id,
+                "still_exists": stored_task is not None,
+            }
+        )
 
         if stored_task is not None:
             errors.append("Deleted task still exists in storage")
+            verification_messages.append(
+                "Verification failed: deleted task still exists in storage."
+            )
 
-    return len(errors) == 0, errors
+        else:
+            verification_messages.append("Deleted task was not found in storage.")
+
+    return len(errors) == 0, errors, evidence, verification_messages
 
 
 def determine_outcome(execution_status, verification_status):
@@ -329,6 +388,7 @@ def main():
     risk = result["risk"]
     decision = result["decision"]
     reason = result["reason"]
+    execution_result = {"evidence": []}
 
     # 11. Execution
 
@@ -371,6 +431,8 @@ def main():
         "decision": decision,
         "execution": execution_status,
         "verification": verification_status,
+        "evidence": execution_result.get("evidence", []),
+        "verification_messages": execution_result.get("verification_messages", []),
         "outcome": determine_outcome(execution_status, verification_status),
         "errors": errors,
         "reason": reason,
