@@ -1,12 +1,17 @@
 import json
+from unittest import result
 
 from agentguard import (
     ActionSchema,
     check_permission,
     create_task,
+    view_task,
+    delete_task,
     evaluate_action,
     execute_task,
+    get_task_from_storage,
     tasks,
+    verification_store,
     save_audit_record,
     verify_state,
 )
@@ -195,6 +200,7 @@ def test_execution_failure_is_recorded():
 def test_create_task_executes_successfully():
 
     tasks.clear()
+    verification_store.clear()
 
     result = create_task("Fix Login API", "high")
 
@@ -206,6 +212,7 @@ def test_create_task_executes_successfully():
 def test_create_task_failure_with_invalid_arguments():
 
     tasks.clear()
+    verification_store.clear()
 
     try:
         create_task()
@@ -582,6 +589,7 @@ def test_view_task_successfully():
     from agentguard import create_task, view_task, tasks
 
     tasks.clear()
+    verification_store.clear()
 
     task = create_task("AgentGuard", "high")
 
@@ -595,6 +603,7 @@ def test_delete_task_successfully():
     from agentguard import create_task, delete_task, view_task, tasks
 
     tasks.clear()
+    verification_store.clear()
 
     task = create_task("AgentGuard", "high")
 
@@ -609,6 +618,7 @@ def test_delete_nonexistent_task():
     from agentguard import delete_task, tasks
 
     tasks.clear()
+    verification_store.clear()
 
     result = delete_task("nonexistent-id")
 
@@ -621,6 +631,7 @@ def test_view_nonexistent_task():
     from agentguard import view_task, tasks
 
     tasks.clear()
+    verification_store.clear()
 
     result = view_task("nonexistent-id")
 
@@ -633,6 +644,7 @@ def test_execute_view_task_successfully():
     from agentguard import create_task, execute_task, tasks
 
     tasks.clear()
+    verification_store.clear()
 
     task = create_task("AgentGuard", "high")
 
@@ -652,6 +664,7 @@ def test_execute_delete_task_successfully():
     from agentguard import create_task, execute_task, view_task, tasks
 
     tasks.clear()
+    verification_store.clear()
 
     task = create_task("AgentGuard", "high")
 
@@ -672,6 +685,7 @@ def test_execute_view_nonexistent_task():
     import agentguard
 
     agentguard.tasks.clear()
+    agentguard.verification_store.clear()
 
     expected = {"action": "view_task", "task_id": "missing-task"}
 
@@ -689,6 +703,7 @@ def test_execute_delete_nonexistent_task():
     import agentguard
 
     agentguard.tasks.clear()
+    agentguard.verification_store.clear()
 
     expected = {"action": "delete_task", "task_id": "missing-task"}
 
@@ -719,6 +734,8 @@ def test_execute_delete_detects_false_success(monkeypatch):
     assert result["execution"] == "SUCCESS"
     assert result["verification"] == "FAILED"
     assert "Deleted task still exists in storage" in result["errors"]
+    assert result["evidence"][0]["still_exists"] is True
+    assert result["evidence"][0]["deleted"] is False
 
 
 def test_execute_create_returns_verification_evidence():
@@ -733,6 +750,7 @@ def test_execute_create_returns_verification_evidence():
     assert len(result["evidence"]) == 1
     assert result["evidence"][0]["check"] == "task_storage_lookup"
     assert result["evidence"][0]["found"] is True
+    assert result["evidence"][0]["data_matches"] is True
 
 
 def test_execute_view_returns_verification_evidence():
@@ -765,6 +783,7 @@ def test_execute_delete_returns_verification_evidence():
     assert len(result["evidence"]) == 1
     assert result["evidence"][0]["check"] == "task_deletion_lookup"
     assert result["evidence"][0]["still_exists"] is False
+    assert result["evidence"][0]["deleted"] is True
 
 
 def test_audit_record_preserves_verification_evidence(tmp_path):
@@ -776,9 +795,21 @@ def test_audit_record_preserves_verification_evidence(tmp_path):
         "verification": "PASSED",
         "outcome": "SUCCESS",
         "evidence": [
-            {"check": "task_storage_lookup", "task_id": "task-123", "found": True}
+            {
+                "check": "task_storage_lookup",
+                "task_id": "task-123",
+                "found": True,
+                "data_matches": True,
+            },
+            {
+                "check": "task_deletion_lookup",
+                "task_id": "task-456",
+                "still_exists": False,
+                "deleted": True,
+            },
         ],
         "verification_messages": ["Created task was found and matches stored data."],
+        "verification_summary": "All verification checks passed",
     }
 
     file_path = tmp_path / "audit.jsonl"
@@ -791,6 +822,7 @@ def test_audit_record_preserves_verification_evidence(tmp_path):
 
     assert saved_report["evidence"] == report["evidence"]
     assert saved_report["verification_messages"] == report["verification_messages"]
+    assert saved_report["verification_summary"] == report["verification_summary"]
 
 
 def test_create_task_verification_failure_message(monkeypatch):
@@ -814,7 +846,7 @@ def test_view_task_verification_failure_message(monkeypatch):
 
     expected = {"action": "view_task", "task_id": "task-123"}
 
-    actual = None
+    actual = {"id": "task-123", "title": "Test task", "priority": "high"}
 
     verified, errors, evidence, messages = verify_state(expected, actual)
 
@@ -839,3 +871,172 @@ def test_delete_task_verification_failure_message(monkeypatch):
     assert verified is False
     assert "Deleted task still exists in storage" in errors
     assert any("Verification failed" in message for message in messages)
+
+
+def test_verify_state_rejects_invalid_inputs():
+
+    expected = {"action": "create_task"}
+    actual = None
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "Expected and actual results must be dictionaries" in errors
+    assert "Verification failed: invalid input data." in messages
+
+
+def test_verify_state_rejects_unsupported_action():
+
+    expected = {"action": "unknown_task"}
+
+    actual = {"id": "task-123"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "Unsupported action for verification" in errors
+    assert "Verification failed: unsupported action." in messages
+
+
+def test_verify_state_rejects_empty_task_id():
+
+    expected = {"action": "create_task", "title": "Test task", "priority": "high"}
+
+    actual = {"id": "", "title": "Test task", "priority": "high"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "Created task is missing its ID" in errors
+    assert "Verification failed: created task has no valid ID." in messages
+
+
+def test_verify_state_handles_missing_expected_fields():
+
+    expected = {"action": "create_task"}
+
+    actual = {"id": "task-123", "title": "Test task", "priority": "high"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "title is incorrect" in errors
+    assert "priority is incorrect" in errors
+
+
+def test_verification_store_is_separate_from_tasks():
+
+    tasks.clear()
+    verification_store.clear()
+
+    verification_store["task-123"] = {
+        "id": "task-123",
+        "title": "Test task",
+        "priority": "high",
+    }
+
+    result = get_task_from_storage("task-123")
+
+    assert result is not None
+    assert result["id"] == "task-123"
+    assert result["title"] == "Test task"
+
+
+def test_verification_store_returns_a_copy():
+
+    tasks.clear()
+    verification_store.clear()
+
+    verification_store["task-123"] = {
+        "id": "task-123",
+        "title": "Original task",
+        "priority": "high",
+    }
+
+    result = get_task_from_storage("task-123")
+    result["title"] = "Modified task"
+
+    assert verification_store["task-123"]["title"] == "Original task"
+
+
+def test_delete_task_removes_task_from_both_stores():
+
+    tasks.clear()
+    verification_store.clear()
+
+    task = create_task("Test deletion", "high")
+    task_id = task["id"]
+
+    result = delete_task(task_id)
+
+    assert result is not None
+    assert view_task(task_id) is None
+    assert get_task_from_storage(task_id) is None
+
+
+def test_create_task_is_verified_against_verification_store():
+
+    tasks.clear()
+    verification_store.clear()
+
+    expected = {
+        "action": "create_task",
+        "title": "Verification test",
+        "priority": "high",
+    }
+
+    result = execute_task(expected, expected)
+
+    assert result["execution"] == "SUCCESS"
+    assert result["verification"] == "PASSED"
+    assert result["evidence"][0]["found"] is True
+    assert result["evidence"][0]["data_matches"] is True
+
+
+def test_create_task_detects_title_mismatch():
+
+    tasks.clear()
+    verification_store.clear()
+
+    actual = create_task("Wrong title", "high")
+
+    expected = {"action": "create_task", "title": "Expected title", "priority": "high"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "title is incorrect" in errors
+    assert any("title does not match" in message for message in messages)
+
+
+def test_create_task_detects_priority_mismatch():
+
+    tasks.clear()
+    verification_store.clear()
+
+    actual = create_task("Test task", "low")
+
+    expected = {"action": "create_task", "title": "Test task", "priority": "high"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "priority is incorrect" in errors
+    assert any("priority does not match" in message for message in messages)
+
+
+def test_create_task_detects_multiple_mismatches():
+
+    tasks.clear()
+    verification_store.clear()
+
+    actual = create_task("Wrong title", "low")
+
+    expected = {"action": "create_task", "title": "Expected title", "priority": "high"}
+
+    verified, errors, evidence, messages = verify_state(expected, actual)
+
+    assert verified is False
+    assert "title is incorrect" in errors
+    assert "priority is incorrect" in errors
+    assert len(messages) >= 2

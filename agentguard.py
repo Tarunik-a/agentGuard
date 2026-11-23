@@ -129,6 +129,7 @@ risk_levels = {"create_task": "MEDIUM", "delete_task": "HIGH", "view_task": "LOW
 
 # 4. Application storage
 tasks = []
+verification_store = {}
 
 
 def create_task(title, priority):
@@ -136,6 +137,7 @@ def create_task(title, priority):
     task = {"id": str(uuid.uuid4()), "title": title, "priority": priority}
 
     tasks.append(task)
+    verification_store[task["id"]] = task.copy()
 
     return task
 
@@ -150,19 +152,20 @@ def view_task(task_id):
 
 
 def delete_task(task_id):
-
     for task in tasks:
         if task["id"] == task_id:
             tasks.remove(task)
+            verification_store.pop(task_id, None)
             return task
 
     return None
 
 
 def get_task_from_storage(task_id):
-    for task in tasks:
-        if task["id"] == task_id:
-            return task.copy()
+    task = verification_store.get(task_id)
+
+    if task is not None:
+        return task.copy()
 
     return None
 
@@ -223,12 +226,19 @@ def verify_state(expected, actual):
     errors = []
     evidence = []
     verification_messages = []
+    if not isinstance(expected, dict) or not isinstance(actual, dict):
+        errors.append("Expected and actual results must be dictionaries")
+        verification_messages.append("Verification failed: invalid input data.")
+        return False, errors, evidence, verification_messages
     action = expected.get("action")
     task_id = expected.get("task_id")
 
     if action == "create_task":
-        if "id" not in actual:
+        if not actual.get("id"):
             errors.append("Created task is missing its ID")
+            verification_messages.append(
+                "Verification failed: created task has no valid ID."
+            )
 
         else:
             stored_task = get_task_from_storage(actual["id"])
@@ -238,6 +248,9 @@ def verify_state(expected, actual):
                     "check": "task_storage_lookup",
                     "task_id": actual["id"],
                     "found": stored_task is not None,
+                    "data_matches": stored_task == actual
+                    if stored_task is not None
+                    else False,
                 }
             )
 
@@ -253,13 +266,19 @@ def verify_state(expected, actual):
                     "Verification failed: stored task data does not match the execution result."
                 )
             else:
-                verification_messages.append("Viewed task matches the stored task.")
+                verification_messages.append("Created task matches the stored task.")
 
-        if expected["title"] != actual.get("title"):
+        if expected.get("title") != actual.get("title"):
             errors.append("title is incorrect")
+            verification_messages.append(
+                "Verification failed: task title does not match the expected title."
+            )
 
-        if expected["priority"] != actual.get("priority"):
+        if expected.get("priority") != actual.get("priority"):
             errors.append("priority is incorrect")
+            verification_messages.append(
+                "Verification failed: task priority does not match the expected priority."
+            )
 
     elif action == "view_task":
         stored_task = get_task_from_storage(task_id)
@@ -268,6 +287,9 @@ def verify_state(expected, actual):
                 "check": "task_storage_lookup",
                 "task_id": task_id,
                 "found": stored_task is not None,
+                "data_matches": stored_task == actual
+                if stored_task is not None
+                else False,
             }
         )
 
@@ -293,6 +315,7 @@ def verify_state(expected, actual):
                 "check": "task_deletion_lookup",
                 "task_id": task_id,
                 "still_exists": stored_task is not None,
+                "deleted": stored_task is None,
             }
         )
 
@@ -304,6 +327,10 @@ def verify_state(expected, actual):
 
         else:
             verification_messages.append("Deleted task was not found in storage.")
+
+    else:
+        errors.append("Unsupported action for verification")
+        verification_messages.append("Verification failed: unsupported action.")
 
     return len(errors) == 0, errors, evidence, verification_messages
 
@@ -431,6 +458,11 @@ def main():
         "decision": decision,
         "execution": execution_status,
         "verification": verification_status,
+        "verification_summary": (
+            "All verification checks passed"
+            if verification_status == "PASSED"
+            else "Verification was not successful"
+        ),
         "evidence": execution_result.get("evidence", []),
         "verification_messages": execution_result.get("verification_messages", []),
         "outcome": determine_outcome(execution_status, verification_status),
