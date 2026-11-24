@@ -45,7 +45,12 @@ def test_valid_manager_action():
 
     proposed = {"action": "create_task", "title": "Fix Login API", "priority": "high"}
 
-    result = evaluate_action(expected, proposed, "Manager")
+    result = evaluate_action(
+        "Create a high priority task called Fix Login API",
+        expected,
+        proposed,
+        "Manager",
+    )
 
     assert result["decision"] == "ALLOW"
 
@@ -57,7 +62,12 @@ def test_invalid_intent_is_blocked():
 
     proposed = {"action": "create_task", "title": "Fix Login API", "priority": "low"}
 
-    result = evaluate_action(expected, proposed, "Manager")
+    result = evaluate_action(
+        "Create a high priority task called Fix Login API",
+        expected,
+        proposed,
+        "Manager",
+    )
 
     assert result["decision"] == "BLOCK"
 
@@ -67,7 +77,9 @@ def test_unauthorized_action_is_blocked():
 
     proposed = {"action": "delete_task", "task_id": "task-123"}
 
-    result = evaluate_action(expected, proposed, "Viewer")
+    result = evaluate_action(
+        "Delete task with ID task-123", expected, proposed, "Viewer"
+    )
 
     assert result["decision"] == "BLOCK"
 
@@ -79,7 +91,9 @@ def test_high_risk_action_requires_review():
 
     proposed = {"action": "delete_task", "task_id": "task-123"}
 
-    result = evaluate_action(expected, proposed, "Admin")
+    result = evaluate_action(
+        "Delete task with ID task-123", expected, proposed, "Admin"
+    )
 
     assert result["decision"] == "REVIEW_REQUIRED"
 
@@ -90,7 +104,12 @@ def test_missing_action_is_blocked():
     expected = {"action": "create_task"}
     proposed = {"title": "Fix Login API"}
 
-    result = evaluate_action(expected, proposed, "Manager")
+    result = evaluate_action(
+        "Create a high priority task called Fix Login API",
+        expected,
+        proposed,
+        "Manager",
+    )
 
     assert result["decision"] == "BLOCK"
 
@@ -98,7 +117,9 @@ def test_missing_action_is_blocked():
 def test_none_proposal_is_blocked():
     expected = {"action": "create_task"}
 
-    result = evaluate_action(expected, None, "Manager")
+    result = evaluate_action(
+        "Create a high priority task called Fix Login API", expected, None, "Manager"
+    )
 
     assert result["decision"] == "BLOCK"
 
@@ -174,7 +195,12 @@ def test_invalid_schema_returns_reason():
 
     proposed = {"action": "create_task", "title": "Fix Login API", "priority": "urgent"}
 
-    result = evaluate_action(expected, proposed, "Manager")
+    result = evaluate_action(
+        "Create a high priority task called Fix Login API",
+        expected,
+        proposed,
+        "Manager",
+    )
 
     assert result["decision"] == "BLOCK"
     assert result["schema_valid"] is False

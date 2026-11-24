@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 
+from agent_adapter import generate_action
+
 
 class ActionSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -30,13 +32,6 @@ class ActionSchema(BaseModel):
 
 # AGENTGUARD - STRUCTURED REPORT
 
-# 1. Expected task
-expected = {"action": "delete_task", "task_id": "task-123"}
-
-proposed = {"action": "delete_task", "task_id": "task-123"}
-
-# 3. User details
-user_role = "Admin"
 
 permissions = {
     "Admin": ["create_task", "delete_task"],
@@ -49,7 +44,7 @@ def check_permission(role, action):
     return action in permissions.get(role, [])
 
 
-def evaluate_action(expected, proposed, role):
+def evaluate_action(user_request, expected, proposed, role):
 
     # 1. Check whether inputs are dictionaries
     if not isinstance(expected, dict) or not isinstance(proposed, dict):
@@ -79,7 +74,7 @@ def evaluate_action(expected, proposed, role):
         }
 
     # 3. Check intent
-    intent_valid = expected == proposed
+    intent_valid = verify_intent(user_request, proposed)
 
     # 4. Check permission
     action = validated.action
@@ -123,6 +118,41 @@ def evaluate_action(expected, proposed, role):
         "reason": reason,
         "errors": [],
     }
+
+
+def verify_intent(user_request, proposed):
+
+    request = user_request.lower()
+
+    action = proposed.get("action")
+
+    if action == "create_task":
+        if "create" not in request and "add" not in request:
+            return False
+
+        if proposed.get("priority") not in request.split():
+            return False
+
+        title = proposed.get("title", "").lower()
+
+        if not title or title not in request:
+            return False
+
+        return True
+
+    elif action == "view_task":
+        if "view" not in request and "show" not in request:
+            return False
+
+        return str(proposed.get("task_id")) in request
+
+    elif action == "delete_task":
+        if "delete" not in request and "remove" not in request:
+            return False
+
+        return str(proposed.get("task_id")) in request
+
+    return False
 
 
 risk_levels = {"create_task": "MEDIUM", "delete_task": "HIGH", "view_task": "LOW"}
@@ -407,7 +437,33 @@ def save_audit_record(report, file_path="audit_log.jsonl"):
 
 
 def main():
-    result = evaluate_action(expected, proposed, user_role)
+    # 2. User instruction
+    user_request = input("What would you like AgentGuard to do? ")
+
+    # Generate proposed action using local AI
+    proposed = generate_action(user_request)
+
+    print("\nAI Proposed Action:", proposed)
+
+    # Reject invalid AI responses
+    if proposed.get("action") == "invalid":
+        print("\nAgentGuard rejected the invalid AI proposal.")
+        return
+
+    # Ask user to confirm the interpreted action
+    confirmation = (
+        input("\nIs this the action you intended? (yes/no): ").strip().lower()
+    )
+
+    if confirmation != "yes":
+        print("\nAction cancelled by user.")
+        return
+
+    expected = proposed.copy()
+
+    # 3. User details
+    user_role = "Admin"
+    result = evaluate_action(user_request, expected, proposed, user_role)
     schema_valid = result["schema_valid"]
 
     intent_valid = result["intent_valid"]

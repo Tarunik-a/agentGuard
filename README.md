@@ -235,5 +235,5 @@ The framework aims to improve the trustworthiness, accountability, and reliabili
 
 **Project:** AgentGuard  
 **Category:** AI / Machine Learning / Software Engineering  
-**Language:** Python  
+**Language:** Python
 **Status:** Under Development
