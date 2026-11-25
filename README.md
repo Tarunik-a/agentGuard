@@ -184,10 +184,29 @@ cd AgentGuard
 ### 3. Install dependencies
 
 ```bash
-pip install pydantic pytest
+pip install pydantic pytest ollama sqlalchemy pymysql python-dotenv
 ```
 
-### 4. Run AgentGuard
+### 4.Database Configuration
+
+### 1. Install and start MySQL
+
+### 2. Create the database
+
+CREATE DATABASE agentguard_db;
+
+### 3. Create a .env file
+
+Create it in the AgentGuard project root.
+
+### 4. Configure database credentials
+
+DB_USER=root
+DB_PASSWORD=your_password
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=agentguard_db
+### 5. Run AgentGuard
 
 ```bash
 python agentguard.py

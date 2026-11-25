@@ -1,5 +1,9 @@
 import json
 import uuid
+
+from database import SessionLocal
+from models import Task, AuditRecord
+
 from datetime import datetime
 from typing import Literal
 
@@ -157,47 +161,88 @@ def verify_intent(user_request, proposed):
 
 risk_levels = {"create_task": "MEDIUM", "delete_task": "HIGH", "view_task": "LOW"}
 
-# 4. Application storage
-tasks = []
-verification_store = {}
-
 
 def create_task(title, priority):
 
     task = {"id": str(uuid.uuid4()), "title": title, "priority": priority}
 
-    tasks.append(task)
-    verification_store[task["id"]] = task.copy()
+    session = SessionLocal()
+
+    try:
+        db_task = Task(id=task["id"], title=task["title"], priority=task["priority"])
+
+        session.add(db_task)
+        session.commit()
+
+    except Exception:
+        session.rollback()
+        raise
+
+    finally:
+        session.close()
 
     return task
 
 
 def view_task(task_id):
 
-    for task in tasks:
-        if task["id"] == task_id:
-            return task
+    session = SessionLocal()
 
-    return None
+    try:
+        db_task = session.query(Task).filter(Task.id == task_id).first()
+
+        if db_task is None:
+            return None
+
+        return {"id": db_task.id, "title": db_task.title, "priority": db_task.priority}
+
+    finally:
+        session.close()
 
 
 def delete_task(task_id):
-    for task in tasks:
-        if task["id"] == task_id:
-            tasks.remove(task)
-            verification_store.pop(task_id, None)
-            return task
 
-    return None
+    session = SessionLocal()
+
+    try:
+        db_task = session.query(Task).filter(Task.id == task_id).first()
+
+        if db_task is None:
+            return None
+
+        deleted_task = {
+            "id": db_task.id,
+            "title": db_task.title,
+            "priority": db_task.priority,
+        }
+
+        session.delete(db_task)
+        session.commit()
+
+        return deleted_task
+
+    except Exception:
+        session.rollback()
+        raise
+
+    finally:
+        session.close()
 
 
 def get_task_from_storage(task_id):
-    task = verification_store.get(task_id)
 
-    if task is not None:
-        return task.copy()
+    session = SessionLocal()
 
-    return None
+    try:
+        db_task = session.query(Task).filter(Task.id == task_id).first()
+
+        if db_task is None:
+            return None
+
+        return {"id": db_task.id, "title": db_task.title, "priority": db_task.priority}
+
+    finally:
+        session.close()
 
 
 def execute_task(expected, proposed):
@@ -427,13 +472,52 @@ def save_audit_record(report, file_path="audit_log.jsonl"):
 
     try:
         serialized_report = json.dumps(report)
+        serialized_evidence = json.dumps(report.get("evidence", []))
+    except (TypeError, ValueError) as error:
+        return {"saved": False, "error": str(error)}
 
-        with open(file_path, "a") as file:
+    session = SessionLocal()
+
+    try:
+        audit_record = AuditRecord(
+            record_id=report["record_id"],
+            decision=report["decision"],
+            execution=report["execution"],
+            verification=report["verification"],
+            outcome=report["outcome"],
+            evidence=serialized_evidence,
+        )
+
+        session.add(audit_record)
+        session.commit()
+
+    except Exception as error:
+        session.rollback()
+        return {"saved": False, "error": str(error)}
+
+    finally:
+        session.close()
+
+    # MySQL is the primary audit store.
+    # JSONL is a secondary export.
+    try:
+        with open(file_path, "a", encoding="utf-8") as file:
             file.write(serialized_report + "\n")
 
-        return {"saved": True, "error": None}
-    except (OSError, TypeError, ValueError) as error:
-        return {"saved": False, "error": str(error)}
+        return {
+            "saved": True,
+            "error": None,
+            "database_saved": True,
+            "jsonl_saved": True,
+        }
+
+    except OSError as error:
+        return {
+            "saved": True,
+            "error": f"Database saved successfully, but JSONL export failed: {error}",
+            "database_saved": True,
+            "jsonl_saved": False,
+        }
 
 
 def main():

@@ -1,6 +1,7 @@
 import json
 from unittest import result
 
+import uuid
 from agentguard import (
     ActionSchema,
     check_permission,
@@ -10,11 +11,16 @@ from agentguard import (
     evaluate_action,
     execute_task,
     get_task_from_storage,
-    tasks,
-    verification_store,
     save_audit_record,
     verify_state,
 )
+
+from database import SessionLocal
+from models import Task
+
+import json
+from database import SessionLocal
+from models import AuditRecord
 
 
 def test_admin_can_delete_task():
@@ -225,20 +231,23 @@ def test_execution_failure_is_recorded():
 
 def test_create_task_executes_successfully():
 
-    tasks.clear()
-    verification_store.clear()
-
     result = create_task("Fix Login API", "high")
 
+    assert result["id"] is not None
     assert result["title"] == "Fix Login API"
     assert result["priority"] == "high"
-    assert result in tasks
+
+    stored_task = view_task(result["id"])
+
+    assert stored_task is not None
+    assert stored_task["id"] == result["id"]
+    assert stored_task["title"] == "Fix Login API"
+    assert stored_task["priority"] == "high"
+
+    delete_task(result["id"])
 
 
 def test_create_task_failure_with_invalid_arguments():
-
-    tasks.clear()
-    verification_store.clear()
 
     try:
         create_task()
@@ -318,7 +327,7 @@ def test_audit_record_contains_outcome(tmp_path):
     audit_file = tmp_path / "audit_log.jsonl"
 
     report = {
-        "record_id": "test-001",
+        "record_id": str(uuid.uuid4()),
         "execution": "SUCCESS",
         "verification": "FAILED",
         "outcome": "VERIFICATION_FAILED",
@@ -332,7 +341,7 @@ def test_audit_record_contains_outcome(tmp_path):
         saved_record = json.loads(file.readline())
 
     assert saved_record["outcome"] == "VERIFICATION_FAILED"
-    assert saved_record["record_id"] == "test-001"
+    assert saved_record["record_id"] == report["record_id"]
     assert saved_record["audit_status"] == "PENDING"
 
 
@@ -345,7 +354,7 @@ def test_audit_log_preserves_multiple_records(tmp_path):
     audit_file = tmp_path / "audit_log.jsonl"
 
     first_report = {
-        "record_id": "test-001",
+        "record_id": str(uuid.uuid4()),
         "outcome": "SUCCESS",
         "decision": "ALLOW",
         "execution": "SUCCESS",
@@ -353,7 +362,7 @@ def test_audit_log_preserves_multiple_records(tmp_path):
     }
 
     second_report = {
-        "record_id": "test-002",
+        "record_id": str(uuid.uuid4()),
         "outcome": "VERIFICATION_FAILED",
         "decision": "ALLOW",
         "execution": "SUCCESS",
@@ -367,8 +376,8 @@ def test_audit_log_preserves_multiple_records(tmp_path):
         records = [json.loads(line) for line in file]
 
     assert len(records) == 2
-    assert records[0]["record_id"] == "test-001"
-    assert records[1]["record_id"] == "test-002"
+    assert records[0]["record_id"] == first_report["record_id"]
+    assert records[1]["record_id"] == second_report["record_id"]
 
 
 def test_audit_save_handles_invalid_path(tmp_path):
@@ -593,7 +602,7 @@ def test_audit_saves_valid_report(tmp_path):
     audit_file = tmp_path / "audit_log.jsonl"
 
     report = {
-        "record_id": "test-010",
+        "record_id": str(uuid.uuid4()),
         "outcome": "SUCCESS",
         "decision": "ALLOW",
         "execution": "SUCCESS",
@@ -612,24 +621,22 @@ def test_audit_saves_valid_report(tmp_path):
 
 def test_view_task_successfully():
 
-    from agentguard import create_task, view_task, tasks
-
-    tasks.clear()
-    verification_store.clear()
+    from agentguard import create_task, view_task, delete_task
 
     task = create_task("AgentGuard", "high")
 
-    result = view_task(task["id"])
+    try:
+        result = view_task(task["id"])
 
-    assert result == task
+        assert result == task
+
+    finally:
+        delete_task(task["id"])
 
 
 def test_delete_task_successfully():
 
-    from agentguard import create_task, delete_task, view_task, tasks
-
-    tasks.clear()
-    verification_store.clear()
+    from agentguard import create_task, delete_task, view_task
 
     task = create_task("AgentGuard", "high")
 
@@ -641,61 +648,49 @@ def test_delete_task_successfully():
 
 def test_delete_nonexistent_task():
 
-    from agentguard import delete_task, tasks
-
-    tasks.clear()
-    verification_store.clear()
+    from agentguard import delete_task
 
     result = delete_task("nonexistent-id")
 
     assert result is None
-    assert tasks == []
 
 
 def test_view_nonexistent_task():
 
-    from agentguard import view_task, tasks
-
-    tasks.clear()
-    verification_store.clear()
+    from agentguard import view_task
 
     result = view_task("nonexistent-id")
 
     assert result is None
-    assert tasks == []
 
 
 def test_execute_view_task_successfully():
 
-    from agentguard import create_task, execute_task, tasks
-
-    tasks.clear()
-    verification_store.clear()
+    from agentguard import create_task, execute_task, delete_task
 
     task = create_task("AgentGuard", "high")
 
-    expected = {"action": "view_task", "task_id": task["id"]}
+    try:
+        expected = {"action": "view_task", "task_id": task["id"]}
+        proposed = expected.copy()
 
-    proposed = expected.copy()
+        result = execute_task(expected, proposed)
 
-    result = execute_task(expected, proposed)
+        assert result["execution"] == "SUCCESS"
+        assert result["verification"] == "PASSED"
+        assert result["errors"] == []
 
-    assert result["execution"] == "SUCCESS"
-    assert result["verification"] == "PASSED"
-    assert result["errors"] == []
+    finally:
+        delete_task(task["id"])
 
 
 def test_execute_delete_task_successfully():
 
-    from agentguard import create_task, execute_task, view_task, tasks
-
-    tasks.clear()
-    verification_store.clear()
+    from agentguard import create_task, execute_task, view_task
 
     task = create_task("AgentGuard", "high")
 
     expected = {"action": "delete_task", "task_id": task["id"]}
-
     proposed = expected.copy()
 
     result = execute_task(expected, proposed)
@@ -709,9 +704,6 @@ def test_execute_delete_task_successfully():
 def test_execute_view_nonexistent_task():
 
     import agentguard
-
-    agentguard.tasks.clear()
-    agentguard.verification_store.clear()
 
     expected = {"action": "view_task", "task_id": "missing-task"}
 
@@ -727,9 +719,6 @@ def test_execute_view_nonexistent_task():
 def test_execute_delete_nonexistent_task():
 
     import agentguard
-
-    agentguard.tasks.clear()
-    agentguard.verification_store.clear()
 
     expected = {"action": "delete_task", "task_id": "missing-task"}
 
@@ -815,7 +804,7 @@ def test_execute_delete_returns_verification_evidence():
 def test_audit_record_preserves_verification_evidence(tmp_path):
 
     report = {
-        "record_id": "evidence-test-001",
+        "record_id": str(uuid.uuid4()),
         "decision": "ALLOW",
         "execution": "SUCCESS",
         "verification": "PASSED",
@@ -950,45 +939,65 @@ def test_verify_state_handles_missing_expected_fields():
     assert "priority is incorrect" in errors
 
 
-def test_verification_store_is_separate_from_tasks():
+def test_database_verification_reads_task_not_in_memory_list():
 
-    tasks.clear()
-    verification_store.clear()
+    task_id = "task-123"
 
-    verification_store["task-123"] = {
-        "id": "task-123",
-        "title": "Test task",
-        "priority": "high",
-    }
+    session = SessionLocal()
 
-    result = get_task_from_storage("task-123")
+    try:
+        session.merge(Task(id=task_id, title="Test task", priority="high"))
+        session.commit()
+    finally:
+        session.close()
 
-    assert result is not None
-    assert result["id"] == "task-123"
-    assert result["title"] == "Test task"
+    try:
+        result = get_task_from_storage(task_id)
+
+        assert result is not None
+        assert result["id"] == task_id
+        assert result["title"] == "Test task"
+
+    finally:
+        session = SessionLocal()
+        try:
+            session.query(Task).filter(Task.id == task_id).delete()
+            session.commit()
+        finally:
+            session.close()
 
 
-def test_verification_store_returns_a_copy():
+def test_database_verification_returns_a_copy():
 
-    tasks.clear()
-    verification_store.clear()
+    task_id = "task-456"
 
-    verification_store["task-123"] = {
-        "id": "task-123",
-        "title": "Original task",
-        "priority": "high",
-    }
+    session = SessionLocal()
 
-    result = get_task_from_storage("task-123")
-    result["title"] = "Modified task"
+    try:
+        session.merge(Task(id=task_id, title="Original task", priority="high"))
+        session.commit()
+    finally:
+        session.close()
 
-    assert verification_store["task-123"]["title"] == "Original task"
+    try:
+        result = get_task_from_storage(task_id)
+
+        result["title"] = "Modified task"
+
+        original = get_task_from_storage(task_id)
+
+        assert original["title"] == "Original task"
+
+    finally:
+        session = SessionLocal()
+        try:
+            session.query(Task).filter(Task.id == task_id).delete()
+            session.commit()
+        finally:
+            session.close()
 
 
 def test_delete_task_removes_task_from_both_stores():
-
-    tasks.clear()
-    verification_store.clear()
 
     task = create_task("Test deletion", "high")
     task_id = task["id"]
@@ -1000,29 +1009,23 @@ def test_delete_task_removes_task_from_both_stores():
     assert get_task_from_storage(task_id) is None
 
 
-def test_create_task_is_verified_against_verification_store():
+def test_create_task_is_verified_against_database():
 
-    tasks.clear()
-    verification_store.clear()
+    result = create_task("Database verification test", "high")
 
-    expected = {
-        "action": "create_task",
-        "title": "Verification test",
-        "priority": "high",
-    }
+    try:
+        verified_task = get_task_from_storage(result["id"])
 
-    result = execute_task(expected, expected)
+        assert verified_task is not None
+        assert verified_task["id"] == result["id"]
+        assert verified_task["title"] == "Database verification test"
+        assert verified_task["priority"] == "high"
 
-    assert result["execution"] == "SUCCESS"
-    assert result["verification"] == "PASSED"
-    assert result["evidence"][0]["found"] is True
-    assert result["evidence"][0]["data_matches"] is True
+    finally:
+        delete_task(result["id"])
 
 
 def test_create_task_detects_title_mismatch():
-
-    tasks.clear()
-    verification_store.clear()
 
     actual = create_task("Wrong title", "high")
 
@@ -1037,9 +1040,6 @@ def test_create_task_detects_title_mismatch():
 
 def test_create_task_detects_priority_mismatch():
 
-    tasks.clear()
-    verification_store.clear()
-
     actual = create_task("Test task", "low")
 
     expected = {"action": "create_task", "title": "Test task", "priority": "high"}
@@ -1053,9 +1053,6 @@ def test_create_task_detects_priority_mismatch():
 
 def test_create_task_detects_multiple_mismatches():
 
-    tasks.clear()
-    verification_store.clear()
-
     actual = create_task("Wrong title", "low")
 
     expected = {"action": "create_task", "title": "Expected title", "priority": "high"}
@@ -1066,3 +1063,88 @@ def test_create_task_detects_multiple_mismatches():
     assert "title is incorrect" in errors
     assert "priority is incorrect" in errors
     assert len(messages) >= 2
+
+
+def test_audit_evidence_persists_in_database(tmp_path):
+
+    record_id = str(uuid.uuid4())
+
+    evidence = [
+        {
+            "check": "task_storage_lookup",
+            "task_id": "task-test-001",
+            "found": True,
+            "data_matches": True,
+        }
+    ]
+
+    report = {
+        "record_id": record_id,
+        "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "PASSED",
+        "outcome": "SUCCESS",
+        "evidence": evidence,
+    }
+
+    audit_file = tmp_path / "audit_log.jsonl"
+
+    result = save_audit_record(report, audit_file)
+
+    assert result["saved"] is True
+
+    session = SessionLocal()
+
+    try:
+        saved_record = (
+            session.query(AuditRecord)
+            .filter(AuditRecord.record_id == record_id)
+            .first()
+        )
+
+        assert saved_record is not None
+        assert json.loads(saved_record.evidence) == evidence
+
+    finally:
+        session.query(AuditRecord).filter(AuditRecord.record_id == record_id).delete()
+        session.commit()
+        session.close()
+
+
+def test_audit_database_save_succeeds_when_jsonl_export_fails():
+
+    record_id = str(uuid.uuid4())
+
+    report = {
+        "record_id": record_id,
+        "decision": "ALLOW",
+        "execution": "SUCCESS",
+        "verification": "PASSED",
+        "outcome": "SUCCESS",
+        "evidence": [],
+    }
+
+    invalid_path = "Z:/invalid_folder/audit_log.jsonl"
+
+    result = save_audit_record(report, invalid_path)
+
+    assert result["saved"] is True
+    assert result["database_saved"] is True
+    assert result["jsonl_saved"] is False
+    assert "JSONL export failed" in result["error"]
+
+    session = SessionLocal()
+
+    try:
+        saved_record = (
+            session.query(AuditRecord)
+            .filter(AuditRecord.record_id == record_id)
+            .first()
+        )
+
+        assert saved_record is not None
+
+    finally:
+        session.query(AuditRecord).filter(AuditRecord.record_id == record_id).delete()
+        session.commit()
+        session.close()
