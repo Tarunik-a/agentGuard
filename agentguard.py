@@ -1,6 +1,8 @@
 import json
 import uuid
 
+import re
+
 from database import SessionLocal
 from models import Task, AuditRecord
 
@@ -148,7 +150,12 @@ def verify_intent(user_request, proposed):
         if "view" not in request and "show" not in request:
             return False
 
-        return str(proposed.get("task_id")) in request
+        task_id = str(proposed.get("task_id", ""))
+
+        if not task_id:
+            return False
+
+        return re.search(rf"(?<!\w){re.escape(task_id)}(?!\w)", request) is not None
 
     elif action == "delete_task":
         if "delete" not in request and "remove" not in request:
